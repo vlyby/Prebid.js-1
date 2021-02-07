@@ -1,26 +1,31 @@
 import {registerBidder} from '../src/adapters/bidderFactory.js';
+import { BANNER } from '../src/mediaTypes.js';
+
 const utils = require('../src/utils.js');
 const BIDDER_CODE = 'vlyby';
-const GVL_ID = 123;
-const ENDPOINT_URL = 'http://localhost:3000/prebid';
-const SCRIPT_URL = 'http://localhost:3000/qad/qad-outer2.js';
+const ENDPOINT_URL = 'https://vlyby.com/prebid';
 const gdprStatus = {
-  GDPR_APPLIES_PUBLISHER: 12,
-  GDPR_APPLIES_GLOBAL: 11,
   GDPR_DOESNT_APPLY: 0,
-  CMP_NOT_FOUND_OR_ERROR: 22
+  GDPR_APPLIES_PUBLISHER: 1,
+  GDPR_APPLIES_GLOBAL: 2,
+  CMP_NOT_FOUND_OR_ERROR: 3
 }
 
 export const spec = {
   code: BIDDER_CODE,
-  gvlid: GVL_ID,
-  supportedMediaTypes: ['banner'],
+  supportedMediaTypes: ['video', 'banner'],
 
+  /**
+   * Determines whether or not the given bid request is valid.
+   *
+   * @param {BidRequest} bid The bid params to validate.
+   * @return boolean True if this is a valid bid, and false otherwise.
+   */
   isBidRequestValid: function(bid) {
     let isValid = false;
     if (typeof bid.params !== 'undefined') {
-      let isValidPlacementId = _validateId(utils.getValue(bid.params, 'placementId'));
-      let isValidPageId = _validateId(utils.getValue(bid.params, 'pageId'));
+      let isValidPlacementId = !!utils.getValue(bid.params, 'pubId');
+      let isValidPageId = !!utils.getValue(bid.params, 'placementId');
       isValid = isValidPlacementId && isValidPageId;
     }
 
@@ -30,13 +35,19 @@ export const spec = {
     return isValid;
   },
 
+  /**
+   * Make a server request from the list of BidRequests.
+   *
+   * @param {validBidRequests[]} an array of bids
+   * @return ServerRequest Info describing the request to the server.
+   */
   buildRequests: function(validBidRequests, bidderRequest) {
     const bids = validBidRequests.map(buildRequestObject);
     const payload = {
       referrer: getReferrerInfo(bidderRequest),
       pageReferrer: document.referrer,
+      host: document.location.host,
       networkBandwidth: getConnectionDownLink(window.navigator),
-      timeToFirstByte: getTimeToFirstByte(window),
       data: bids,
       deviceWidth: screen.width,
       hb_version: '$prebid.version$'
@@ -60,10 +71,6 @@ export const spec = {
       };
     }
 
-    if (bidderRequest && bidderRequest.uspConsent) {
-      payload.us_privacy = bidderRequest.uspConsent
-    }
-
     const payloadString = JSON.stringify(payload);
     return {
       method: 'POST',
@@ -72,45 +79,40 @@ export const spec = {
     };
   },
 
+  /**
+   * Unpack the response from the server into a list of bids.
+   *
+   * @param {*} serverResponse A successful response from the server.
+   * @return {Bid[]} An array of bids which were nested inside the server.
+   */
   interpretResponse: function(serverResponse, bidderRequest) {
     const bidResponses = [];
     serverResponse = serverResponse.body;
 
-    if (serverResponse.responses) {
-      serverResponse.responses.forEach(function (bid) {
+    if (serverResponse) {
+      serverResponse.forEach(function (bid) {
         const bidResponse = {
+          requestId: bid.bidId,
+          placementId: bid.placementId,
+          pubId: bid.pubId,
           cpm: bid.cpm,
+          mediaType: BANNER,
           width: bid.width,
           height: bid.height,
           currency: bid.currency,
           netRevenue: true,
           ttl: bid.ttl,
-          ad: getBannerHtml(),
-          requestId: bid.requestId,
-          placementId: bid.placementId,
-          pubId: bid.pubId,
-          divId: bid.divId
+          ad: bid.ad,
+          creativeId: bid.creativeId,
+          dealId: bid.dealId
         };
-        if (bid.dealId) {
-          bidResponse.dealId = bid.dealId
-        }
+
         bidResponses.push(bidResponse);
       });
     }
     return bidResponses;
   },
 };
-
-function getBannerHtml (bid) {
-  return `
-    <div id="${bid.dataDivid}">
-      <script async='true' type='text/javascript'
-              src="${SCRIPT_URL}" data-PubId='${bid.pubId}'
-              data-PlacementId='${bid.placementId}' data-DivId='${bid.dataDivid}'>
-      </script>
-    </div>
-    `;
-}
 
 function getReferrerInfo(bidderRequest) {
   let ref = '';
@@ -124,40 +126,13 @@ function getConnectionDownLink(nav) {
   return nav && nav.connection && nav.connection.downlink >= 0 ? nav.connection.downlink.toString() : '';
 }
 
-function getTimeToFirstByte(win) {
-  const performance = win.performance || win.webkitPerformance || win.msPerformance || win.mozPerformance;
-
-  const ttfbWithTimingV2 = performance &&
-    typeof performance.getEntriesByType === 'function' &&
-    Object.prototype.toString.call(performance.getEntriesByType) === '[object Function]' &&
-    performance.getEntriesByType('navigation')[0] &&
-    performance.getEntriesByType('navigation')[0].responseStart &&
-    performance.getEntriesByType('navigation')[0].requestStart &&
-    performance.getEntriesByType('navigation')[0].responseStart > 0 &&
-    performance.getEntriesByType('navigation')[0].requestStart > 0 &&
-    Math.round(
-      performance.getEntriesByType('navigation')[0].responseStart - performance.getEntriesByType('navigation')[0].requestStart
-    );
-
-  if (ttfbWithTimingV2) {
-    return ttfbWithTimingV2.toString();
-  }
-
-  const ttfbWithTimingV1 = performance &&
-    performance.timing.responseStart &&
-    performance.timing.requestStart &&
-    performance.timing.responseStart > 0 &&
-    performance.timing.requestStart > 0 &&
-    performance.timing.responseStart - performance.timing.requestStart;
-
-  return ttfbWithTimingV1 ? ttfbWithTimingV1.toString() : '';
-}
-
 function findGdprStatus(gdprApplies, gdprData, apiVersion) {
   let status = gdprStatus.GDPR_APPLIES_PUBLISHER
   if (gdprApplies) {
     if (isGlobalConsent(gdprData, apiVersion)) status = gdprStatus.GDPR_APPLIES_GLOBAL
-  } else status = gdprStatus.GDPR_DOESNT_APPLY
+  } else {
+    status = gdprStatus.GDPR_DOESNT_APPLY
+  }
   return status;
 }
 
@@ -171,16 +146,12 @@ function isGlobalConsent(gdprData, apiVersion) {
 
 function buildRequestObject(bid) {
   const reqObj = {};
-  let placementId = utils.getValue(bid.params, 'placementId');
-  let pageId = utils.getValue(bid.params, 'pageId');
 
   reqObj.sizes = getSizes(bid);
   reqObj.bidId = utils.getBidIdParameter('bidId', bid);
   reqObj.bidderRequestId = utils.getBidIdParameter('bidderRequestId', bid);
-  reqObj.pubId = utils.getBidIdParameter('adUnitCode', bid.pubId);
-  reqObj.divId = utils.getBidIdParameter('adUnitCode', bid.divId);
-  reqObj.placementId = utils.getBidIdParameter('adUnitCode', bid.placementId);
-  // reqObj.pageId = parseInt(pageId, 10);
+  reqObj.pubId = utils.getValue(bid.params, 'pubId');
+  reqObj.placementId = utils.getValue(bid.params, 'placementId');
   reqObj.adUnitCode = utils.getBidIdParameter('adUnitCode', bid);
   reqObj.auctionId = utils.getBidIdParameter('auctionId', bid);
   reqObj.transactionId = utils.getBidIdParameter('transactionId', bid);
@@ -212,10 +183,6 @@ function concatSizes(bid) {
   } else {
     return bid.sizes;
   }
-}
-
-function _validateId(id) {
-  return (parseInt(id) > 0);
 }
 
 registerBidder(spec);
