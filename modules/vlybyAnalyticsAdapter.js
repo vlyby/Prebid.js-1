@@ -89,19 +89,21 @@ function mapObject({
   height,
   width
 }) {
-  return {
-    bidder: bidder,
-    auction_id: auctionId,
-    ad_unit_code: adUnitCode,
-    transaction_id: transactionId || '',
-    bid_size: size || sizes || (width && height !== undefined) ? parseSizes(sizes, width, height) : [''],
-    bid_type: mediaType || mediaTypes ? parseBidType(mediaTypes, mediaType) : [''],
-    time_ms: Date.now() - timestampInit,
-    cur: originalCurrency !== undefined ? originalCurrency : (currency || ''),
-    price: cpm !== undefined ? cpm.toString().substring(0, 4) : '',
-    cur_native: originalCurrency || '',
-    price_native: originalCpm !== undefined ? originalCpm.toString().substring(0, 4) : ''
-  };
+  if(typeof bidder !== "undefined" && bidder) {
+    return {
+      bidder: bidder,
+      auction_id: auctionId,
+      ad_unit_code: adUnitCode,
+      transaction_id: transactionId || '',
+      bid_size: size || sizes || (width && height !== undefined) ? parseSizes(sizes, width, height) : [''],
+      bid_type: mediaType || mediaTypes ? parseBidType(mediaTypes, mediaType) : [''],
+      time_ms: Date.now() - timestampInit,
+      cur: originalCurrency !== undefined ? originalCurrency : (currency || ''),
+      price: cpm !== undefined ? cpm.toString().substring(0, 4) : '',
+      cur_native: originalCurrency || '',
+      price_native: originalCpm !== undefined ? originalCpm.toString().substring(0, 4) : ''
+    };
+  }
 }
 
 function mapUpLevelObject(object, eventType, array) {
@@ -112,8 +114,10 @@ function mapUpLevelObject(object, eventType, array) {
 }
 
 function handleEvent(array, object, eventType, args) {
-  array.push(mapObject(args));
-  mapUpLevelObject(object, eventType, array);
+  if(typeof eventType !== "undefined" && eventType) {
+    array.push(mapObject(args));
+    mapUpLevelObject(object, eventType, array);
+  }
 }
 
 function handleNoBid(eventType, args) {
@@ -143,6 +147,7 @@ function sendRequest(...objects) {
     pubId: initOptions.pubId || '',
     siteId: initOptions.siteId || '',
     placementId: initOptions.placementId || '',
+    requestId: initOptions.requestId || '',
     ad_unit_size: initOptions.ad_unit_size || [''],
     ad_unit_type: initOptions.ad_unit_type || [''],
     c_timeout: initOptions.c_timeout || 0,
@@ -151,8 +156,8 @@ function sendRequest(...objects) {
   postAjax(url, JSON.stringify(obj));
 }
 
-function handleAuctionEnd() {
-  sendRequest(noBidObject, isBidObject, bidTimeOutObject);
+function handleAuctionEnd(args) {
+  sendRequest(noBidObject, isBidObject, bidTimeOutObject,{status: "auctionEnd", data: args});
 }
 
 let vlybyAnalyticsAdapter = Object.assign(adapter({
@@ -183,7 +188,7 @@ let vlybyAnalyticsAdapter = Object.assign(adapter({
         handleBidWon(eventType, args);
         break;
       case AUCTION_END:
-        handleAuctionEnd();
+        handleAuctionEnd(args);
     }
   }
 });
